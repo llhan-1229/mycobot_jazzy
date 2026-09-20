@@ -131,7 +131,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
   double line_rho_threshold;
   double line_theta_threshold;
 
-  // Legacy...remove later Shape fitting parameters
+  // Parameters used by the fallback PCL shape-fitting path
   int shape_fitting_max_iterations;
   double shape_fitting_distance_threshold;
   double shape_fitting_min_radius;
@@ -237,7 +237,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
     declare_parameter("line_cluster_tolerance", 0.025, "The maximum distance between two points to be considered in the same cluster for lines");
     declare_parameter("line_rho_threshold", 0.01, "Tolerance for rho. Used for clustering similar candidate line models before voting.");
     declare_parameter("line_theta_threshold", 0.1, "Tolerance for theta. Used for clustering similar candidate line models before voting.");
-    // Legacy...remove these later
+    // Fallback PCL shape-fitting parameters
     declare_parameter("shape_fitting_max_iterations", 1000, "Maximum iterations for shape fitting RANSAC");
     declare_parameter("shape_fitting_distance_threshold", 0.01, "Distance threshold for shape fitting (in meters)");
     declare_parameter("shape_fitting_min_radius", 0.01, "Minimum radius for cylinder fitting (in meters)");
@@ -320,7 +320,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
     line_rho_threshold = this->get_parameter("line_rho_threshold").as_double();
     line_theta_threshold = this->get_parameter("line_theta_threshold").as_double();
 
-    // Legacy...remove later Get shape fitting parameter values
+    // Get fallback PCL shape-fitting parameter values
     shape_fitting_max_iterations = this->get_parameter("shape_fitting_max_iterations").as_int();
     shape_fitting_distance_threshold = this->get_parameter("shape_fitting_distance_threshold").as_double();
     shape_fitting_min_radius = this->get_parameter("shape_fitting_min_radius").as_double();
@@ -1109,7 +1109,6 @@ class GetPlanningSceneServer : public rclcpp::Node {
 
     // Helpful logging
     RCLCPP_INFO(this->get_logger(), " ");
-    RCLCPP_INFO(this->get_logger(), "Success: %s", response->success ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "Target object ID: %s", response->target_object_id.c_str());
     RCLCPP_INFO(this->get_logger(), "Support surface ID: %s", response->support_surface_id.c_str());
 

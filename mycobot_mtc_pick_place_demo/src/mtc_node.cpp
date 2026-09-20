@@ -44,7 +44,11 @@
 
 // Other utilities
 #include <type_traits>
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -103,14 +107,19 @@ class MTCTaskNode : public rclcpp::Node
 public:
   MTCTaskNode(const rclcpp::NodeOptions& options);
 
-  void doTask();
-  void setupPlanningScene();
+  bool doTask();
+  bool setupPlanningScene();
 
 private:
   mtc::Task task_;
   mtc::Task createTask();
 
   void updateObjectParameters(const moveit_msgs::msg::CollisionObject& collision_object);
+  void validateParameters() const;
+  void logPlanningExperimentMetrics() const;
+
+  std::atomic_size_t grasp_pose_candidates_{ 0 };
+  std::atomic_size_t grasp_ik_successes_{ 0 };
 
   // Variables for calling the GetPlanningScene service
   std::shared_ptr<GetPlanningSceneClient> planning_scene_client;
@@ -119,7 +128,7 @@ private:
   sensor_msgs::msg::Image rgb_image_;
   std::string target_object_id_;
   std::string support_surface_id_;
-  bool service_success_;
+  bool service_success_{ false };
 };
 
 /**
@@ -141,9 +150,13 @@ MTCTaskNode::MTCTaskNode(const rclcpp::NodeOptions& options)
   // General parameters
   declare_parameter("execute", false, "Whether to execute the planned task");
   declare_parameter("max_solutions", 25, "Maximum number of solutions to compute");
+  declare_parameter("perception_service_timeout", 30, "Seconds to wait for perception service availability and response");
 
   // Controller parameters
-  declare_parameter("controller_names", std::vector<std::string>{"arm_controller", "grip_action_controller"}, "Names of the controllers to use");
+  declare_parameter(
+    "controller_names",
+    std::vector<std::string>{"arm_controller", "gripper_action_controller"},
+    "Names of the controllers to use");
 
   // Robot configuration parameters
   declare_parameter("arm_group_name", "arm", "Name of the arm group in the SRDF");
@@ -180,7 +193,7 @@ MTCTaskNode::MTCTaskNode(const rclcpp::NodeOptions& options)
   declare_parameter("move_to_place_timeout", 10.0, "Timeout for move to place stage (seconds)");
 
   // Grasp generation parameters
-  declare_parameter("grasp_pose_angle_delta", 0.1309, "Angular resolution for sampling grasp poses (radians)");
+  declare_parameter("grasp_pose_angle_delta", 0.1039, "Angular resolution for sampling grasp poses (radians)");
   declare_parameter("grasp_pose_max_ik_solutions", 10, "Maximum number of IK solutions for grasp pose generation");
   declare_parameter("grasp_pose_min_solution_distance", 0.8, "Minimum distance in joint-space units between IK solutions for grasp pose");
 
@@ -207,6 +220,74 @@ MTCTaskNode::MTCTaskNode(const rclcpp::NodeOptions& options)
 
   // Initialize the planning scene client
   planning_scene_client = std::make_shared<GetPlanningSceneClient>();
+
+  validateParameters();
+}
+
+void MTCTaskNode::validateParameters() const
+{
+  const auto require_positive = [this](const std::string& name) {
+    if (this->get_parameter(name).as_double() <= 0.0) {
+      throw std::invalid_argument("Parameter '" + name + "' must be greater than zero");
+    }
+  };
+  const auto require_distance_range = [this](const std::string& min_name,
+                                              const std::string& max_name) {
+    const double min = this->get_parameter(min_name).as_double();
+    const double max = this->get_parameter(max_name).as_double();
+    if (min < 0.0 || max <= 0.0 || min > max) {
+      throw std::invalid_argument(
+        "Parameters '" + min_name + "' and '" + max_name +
+        "' must define a non-negative, increasing distance range");
+    }
+  };
+  const auto require_pose = [this](const std::string& name) {
+    const auto values = this->get_parameter(name).as_double_array();
+    if (values.size() != 6 ||
+        !std::all_of(values.begin(), values.end(), [](double value) { return std::isfinite(value); })) {
+      throw std::invalid_argument("Parameter '" + name + "' must contain six finite values");
+    }
+  };
+
+  if (this->get_parameter("max_solutions").as_int() <= 0) {
+    throw std::invalid_argument("Parameter 'max_solutions' must be greater than zero");
+  }
+  if (this->get_parameter("perception_service_timeout").as_int() <= 0) {
+    throw std::invalid_argument("Parameter 'perception_service_timeout' must be greater than zero");
+  }
+  if (this->get_parameter("controller_names").as_string_array().empty()) {
+    throw std::invalid_argument("Parameter 'controller_names' must not be empty");
+  }
+
+  const auto object_type = this->get_parameter("object_type").as_string();
+  const auto dimensions = this->get_parameter("object_dimensions").as_double_array();
+  const std::size_t expected_dimensions = object_type == "cylinder" ? 2 : object_type == "box" ? 3 : 0;
+  if (expected_dimensions == 0 || dimensions.size() != expected_dimensions ||
+      !std::all_of(dimensions.begin(), dimensions.end(), [](double value) { return value > 0.0; })) {
+    throw std::invalid_argument(
+      "Parameter 'object_dimensions' must contain positive cylinder [height, radius] or box [x, y, z] dimensions");
+  }
+
+  require_pose("object_pose");
+  require_pose("grasp_frame_transform");
+  require_pose("place_pose");
+  require_distance_range("approach_object_min_dist", "approach_object_max_dist");
+  require_distance_range("lift_object_min_dist", "lift_object_max_dist");
+  require_distance_range("lower_object_min_dist", "lower_object_max_dist");
+  require_distance_range("retreat_min_distance", "retreat_max_distance");
+  require_positive("move_to_pick_timeout");
+  require_positive("move_to_place_timeout");
+  require_positive("grasp_pose_angle_delta");
+  require_positive("cartesian_step_size");
+
+  const auto validate_scaling = [this](const std::string& name) {
+    const double value = this->get_parameter(name).as_double();
+    if (value <= 0.0 || value > 1.0) {
+      throw std::invalid_argument("Parameter '" + name + "' must be in the range (0, 1]");
+    }
+  };
+  validate_scaling("cartesian_max_velocity_scaling");
+  validate_scaling("cartesian_max_acceleration_scaling");
 }
 
 /**
@@ -222,12 +303,20 @@ void MTCTaskNode::updateObjectParameters(const moveit_msgs::msg::CollisionObject
     std::vector<double> dimensions;
     std::string object_type;
     if (collision_object.primitives[0].type == shape_msgs::msg::SolidPrimitive::CYLINDER) {
+      if (collision_object.primitives[0].dimensions.size() <=
+          shape_msgs::msg::SolidPrimitive::CYLINDER_RADIUS) {
+        throw std::runtime_error("Detected cylinder has invalid dimensions");
+      }
       object_type = "cylinder";
       dimensions = {
         collision_object.primitives[0].dimensions[shape_msgs::msg::SolidPrimitive::CYLINDER_HEIGHT],
         collision_object.primitives[0].dimensions[shape_msgs::msg::SolidPrimitive::CYLINDER_RADIUS]
       };
     } else if (collision_object.primitives[0].type == shape_msgs::msg::SolidPrimitive::BOX) {
+      if (collision_object.primitives[0].dimensions.size() <=
+          shape_msgs::msg::SolidPrimitive::BOX_Z) {
+        throw std::runtime_error("Detected box has invalid dimensions");
+      }
       object_type = "box";
       dimensions = {
         collision_object.primitives[0].dimensions[shape_msgs::msg::SolidPrimitive::BOX_X],
@@ -253,7 +342,7 @@ void MTCTaskNode::updateObjectParameters(const moveit_msgs::msg::CollisionObject
 /**
  * @brief Set up the planning scene with collision objects.
  */
-void MTCTaskNode::setupPlanningScene()
+bool MTCTaskNode::setupPlanningScene()
 {
 
   // Create a planning scene interface to interact with the world
@@ -280,7 +369,10 @@ void MTCTaskNode::setupPlanningScene()
   RCLCPP_INFO(this->get_logger(), "Sending GetPlanningScene service request...");
 
   // Call the service
-  auto response = planning_scene_client->call_service(object_type, object_dimensions);
+  const auto service_timeout = std::chrono::seconds(
+    this->get_parameter("perception_service_timeout").as_int());
+  auto response = planning_scene_client->call_service(
+    object_type, object_dimensions, service_timeout);
 
   RCLCPP_INFO(this->get_logger(), "Service call to the GetPlanningScene service completed.");
 
@@ -292,10 +384,23 @@ void MTCTaskNode::setupPlanningScene()
   support_surface_id_ = response.support_surface_id;
   service_success_ = response.success;
 
+  if (!service_success_) {
+    RCLCPP_ERROR(this->get_logger(),
+      "Perception service failed or returned incomplete data; task planning is aborted");
+    return false;
+  }
+  if (target_object_id_.empty() || support_surface_id_.empty() ||
+      scene_world_.collision_objects.empty()) {
+    RCLCPP_ERROR(this->get_logger(),
+      "Perception response is invalid: target, support surface, and collision objects are required");
+    return false;
+  }
+
   // Add all collision objects to the planning scene
   RCLCPP_INFO(this->get_logger(), "Applying collision objects from service response...");
   if (!psi.applyCollisionObjects(scene_world_.collision_objects)) {
     RCLCPP_ERROR(this->get_logger(), "Failed to add collision objects from service response");
+    return false;
   } else {
       RCLCPP_INFO(this->get_logger(), "Successfully added %zu collision objects from service response to the planning scene",
       scene_world_.collision_objects.size());
@@ -303,20 +408,30 @@ void MTCTaskNode::setupPlanningScene()
 
   // Find the target object in the collision objects and update parameters
   RCLCPP_INFO(this->get_logger(), "Received target_object_id from service: '%s'", target_object_id_.c_str());
+  bool target_found = false;
   for (const auto& collision_object : scene_world_.collision_objects) {
     if (collision_object.id == target_object_id_) {
       updateObjectParameters(collision_object);
+      target_found = true;
       break;
     }
   }
 
+  if (!target_found) {
+    RCLCPP_ERROR(this->get_logger(),
+      "Target object '%s' is not present in the returned collision objects",
+      target_object_id_.c_str());
+    return false;
+  }
+
   RCLCPP_INFO(this->get_logger(), "Planning scene setup completed");
+  return true;
 }
 
 /**
  * @brief Plan and/or execute the pick and place task.
  */
-void MTCTaskNode::doTask()
+bool MTCTaskNode::doTask()
 {
   RCLCPP_INFO(this->get_logger(), "Starting the pick and place task");
 
@@ -324,6 +439,7 @@ void MTCTaskNode::doTask()
 
   // Get parameters
   auto execute = this->get_parameter("execute").as_bool();
+  RCLCPP_INFO(this->get_logger(), "Execution mode: %s", execute ? "enabled" : "plan only");
   auto max_solutions = this->get_parameter("max_solutions").as_int();
 
   try
@@ -334,14 +450,16 @@ void MTCTaskNode::doTask()
   catch (mtc::InitStageException& e)
   {
     RCLCPP_ERROR(this->get_logger(), "Task initialization failed: %s", e.what());
-    return;
+    return false;
   }
 
   // Attempt to plan the task
-  if (!task_.plan(max_solutions))
+  const auto planning_result = task_.plan(max_solutions);
+  logPlanningExperimentMetrics();
+  if (!planning_result)
   {
     RCLCPP_ERROR(this->get_logger(), "Task planning failed");
-    return;
+    return false;
   }
 
   RCLCPP_INFO(this->get_logger(), "Task planning succeeded");
@@ -358,7 +476,7 @@ void MTCTaskNode::doTask()
     if (result.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
     {
       RCLCPP_ERROR(this->get_logger(), "Task execution failed with error code: %d", result.val);
-      return;
+      return false;
     }
     RCLCPP_INFO(this->get_logger(), "Task executed successfully");
   }
@@ -367,7 +485,31 @@ void MTCTaskNode::doTask()
     RCLCPP_INFO(this->get_logger(), "Execution skipped as per configuration");
   }
 
-  return;
+  return true;
+}
+
+void MTCTaskNode::logPlanningExperimentMetrics() const
+{
+  RCLCPP_INFO(
+    this->get_logger(),
+    "EXPERIMENT_METRICS grasp_pose_angle_delta=%.4f candidates=%zu ik_successes=%zu complete_solutions=%zu",
+    this->get_parameter("grasp_pose_angle_delta").as_double(),
+    grasp_pose_candidates_.load(), grasp_ik_successes_.load(), task_.numSolutions());
+
+  bool found_failure = false;
+  task_.stages()->traverseRecursively(
+    [this, &found_failure](const mtc::Stage& stage, unsigned int) {
+      if (stage.numFailures() > 0) {
+        found_failure = true;
+        RCLCPP_INFO(
+          this->get_logger(), "EXPERIMENT_FAILURE_STAGE name='%s' failures=%zu",
+          stage.name().c_str(), stage.numFailures());
+      }
+      return true;
+    });
+  if (!found_failure) {
+    RCLCPP_INFO(this->get_logger(), "EXPERIMENT_FAILURE_STAGE none");
+  }
 }
 
 /**
@@ -376,6 +518,8 @@ void MTCTaskNode::doTask()
  */
 mtc::Task MTCTaskNode::createTask()
 {
+  grasp_pose_candidates_ = 0;
+  grasp_ik_successes_ = 0;
   RCLCPP_INFO(this->get_logger(), "Creating MTC task");
 
   // Create a new Task
@@ -593,6 +737,11 @@ mtc::Task MTCTaskNode::createTask()
       // Sample grasp pose candidates in angle increments around the z-axis of the object
 
       auto stage = std::make_unique<mtc::stages::GenerateGraspPose>("generate grasp pose");
+      stage->addSolutionCallback([this](const mtc::SolutionBase& solution) {
+        if (!solution.isFailure()) {
+          ++grasp_pose_candidates_;
+        }
+      });
       stage->properties().configureInitFrom(mtc::Stage::PARENT);
       stage->properties().set("marker_ns", "grasp_pose");
       stage->setPreGraspPose(gripper_open_pose);
@@ -602,6 +751,11 @@ mtc::Task MTCTaskNode::createTask()
 
       // Compute IK for sampled grasp poses
       auto wrapper = std::make_unique<mtc::stages::ComputeIK>("grasp pose IK", std::move(stage));
+      wrapper->addSolutionCallback([this](const mtc::SolutionBase& solution) {
+        if (!solution.isFailure()) {
+          ++grasp_ik_successes_;
+        }
+      });
       wrapper->setMaxIKSolutions(grasp_pose_max_ik_solutions);
       wrapper->setMinSolutionDistance(grasp_pose_min_solution_distance);
       wrapper->setIKFrame(vectorToEigen(grasp_frame_transform), gripper_frame); // Transform from gripper frame to tool center point (TCP)
@@ -871,9 +1025,13 @@ int main(int argc, char** argv)
     // Set up the planning scene and execute the task
     try {
       RCLCPP_INFO(mtc_task_node->get_logger(), "Setting up planning scene");
-      mtc_task_node->setupPlanningScene();
+      if (!mtc_task_node->setupPlanningScene()) {
+        throw std::runtime_error("Planning scene setup failed");
+      }
       RCLCPP_INFO(mtc_task_node->get_logger(), "Executing task");
-      mtc_task_node->doTask();
+      if (!mtc_task_node->doTask()) {
+        throw std::runtime_error("Pick-and-place task failed");
+      }
       RCLCPP_INFO(mtc_task_node->get_logger(), "Task execution completed. Keeping node alive for visualization. Press Ctrl+C to exit.");
 
       // Keep the node running until Ctrl+C is pressed

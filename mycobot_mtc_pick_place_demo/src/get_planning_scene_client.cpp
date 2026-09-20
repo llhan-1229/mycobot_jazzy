@@ -36,18 +36,19 @@ GetPlanningSceneClient::GetPlanningSceneClient()
 }
 
 GetPlanningSceneClient::PlanningSceneResponse
-GetPlanningSceneClient::call_service(const std::string& target_shape, const std::vector<double>& target_dimensions)
+GetPlanningSceneClient::call_service(
+  const std::string& target_shape,
+  const std::vector<double>& target_dimensions,
+  std::chrono::seconds timeout)
 {
   PlanningSceneResponse response;
   response.success = false;
 
   // Wait for the service to become available
-  while (!client_->wait_for_service(std::chrono::seconds(1))) {
-    if (!rclcpp::ok()) {
-      RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
-      return response;
-    }
-    RCLCPP_INFO(get_logger(), "Service not available, waiting again...");
+  if (!client_->wait_for_service(timeout)) {
+    RCLCPP_ERROR(get_logger(), "Planning scene service was not available within %ld seconds",
+      timeout.count());
+    return response;
   }
 
   // Prepare the request
@@ -59,7 +60,7 @@ GetPlanningSceneClient::call_service(const std::string& target_shape, const std:
   auto result_future = client_->async_send_request(request);
 
   // Wait for the result
-  if (rclcpp::spin_until_future_complete(get_node_base_interface(), result_future) ==
+  if (rclcpp::spin_until_future_complete(get_node_base_interface(), result_future, timeout) ==
     rclcpp::FutureReturnCode::SUCCESS)
   {
     auto result = result_future.get();
@@ -76,7 +77,8 @@ GetPlanningSceneClient::call_service(const std::string& target_shape, const std:
     // Log information about the response
     log_response_info(response);
   } else {
-    RCLCPP_ERROR(get_logger(), "Failed to call service");
+    RCLCPP_ERROR(get_logger(), "Planning scene service did not respond within %ld seconds",
+      timeout.count());
   }
 
   return response;

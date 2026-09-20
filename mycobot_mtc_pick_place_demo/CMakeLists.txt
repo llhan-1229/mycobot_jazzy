@@ -153,6 +153,17 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/system_ready.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(FILES
+  README.md
+  DEMO_RECORD.md
+  DESTINATION share/${PROJECT_NAME}
+)
+
 # Testing
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

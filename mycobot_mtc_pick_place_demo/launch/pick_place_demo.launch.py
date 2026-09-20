@@ -15,6 +15,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
@@ -33,6 +34,7 @@ def generate_launch_description():
     # Launch configuration variables
     use_sim_time = LaunchConfiguration('use_sim_time')
     exe = LaunchConfiguration('exe')
+    execute = LaunchConfiguration('execute')
 
     # Get the package share directory
     pkg_share_moveit_config_temp = FindPackageShare(package=package_name_moveit_config)
@@ -55,6 +57,11 @@ def generate_launch_description():
         default_value="mtc_node",
         description="The MoveIt Task Constructor node responsible for pick and place",
         choices=["mtc_node"])
+
+    declare_execute_cmd = DeclareLaunchArgument(
+        name='execute',
+        default_value='false',
+        description='Execute the best planned solution when true; otherwise only visualize it')
 
     def configure_setup(context):
         """Configure MoveIt and create nodes with proper string conversions."""
@@ -88,7 +95,7 @@ def generate_launch_description():
             .joint_limits(file_path=joint_limits_file_path)
             .robot_description_kinematics(file_path=kinematics_file_path)
             .planning_pipelines(
-                pipelines=["ompl", "pilz_industrial_motion_planner", "stomp"],
+                pipelines=["ompl", "pilz_industrial_motion_planner"],
                 default_planning_pipeline="ompl"
             )
             .planning_scene_monitor(
@@ -106,10 +113,11 @@ def generate_launch_description():
             executable=exe,
             output="screen",
             parameters=[
+                mtc_node_params_file_path,
                 moveit_config.to_dict(),
                 {'use_sim_time': use_sim_time},
+                {'execute': ParameterValue(execute, value_type=bool)},
                 {'start_state': {'content': initial_positions_file_path}},
-                mtc_node_params_file_path,
             ],
         )
 
@@ -122,6 +130,7 @@ def generate_launch_description():
     ld.add_action(declare_robot_name_cmd)
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_exe_cmd)
+    ld.add_action(declare_execute_cmd)
 
     # Add the setup and node creation
     ld.add_action(OpaqueFunction(function=configure_setup))

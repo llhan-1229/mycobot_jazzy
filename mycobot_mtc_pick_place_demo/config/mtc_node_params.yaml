@@ -3,11 +3,12 @@ mtc_node:
     # General parameters
     execute: false
     max_solutions: 25
+    perception_service_timeout: 30
 
     # Controller parameters
     controller_names:
       - "arm_controller"
-      - "grip_action_controller"
+      - "gripper_action_controller"
 
     # Robot configuration parameters
     arm_group_name: "arm"

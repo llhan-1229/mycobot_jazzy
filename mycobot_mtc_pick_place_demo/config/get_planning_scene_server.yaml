@@ -71,7 +71,7 @@ get_planning_scene_server:
     line_rho_threshold: 0.01
     line_theta_threshold: 0.1
 
-    # Shape fitting parameters
+    # Fallback PCL shape-fitting parameters
     shape_fitting_max_iterations: 1000
     shape_fitting_distance_threshold: 0.01
     shape_fitting_min_radius: 0.01

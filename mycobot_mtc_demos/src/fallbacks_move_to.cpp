@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
 
   // Cartesian path planner (lowest computational requirements, best for straight-line paths with no obstacles)
   auto cartesian = std::make_shared<solvers::CartesianPath>();
-  cartesian->setJumpThreshold(2.0);
+  //cartesian->setPrecision(moveit::core::CartesianPrecision(2.0));
   RCLCPP_INFO(logger, "Cartesian path planner set up with jump threshold: 2.0");
 
   // Create PipelinePlanner for Pilz (moderate computational requirements, inherently considers obstacles)
@@ -203,8 +203,32 @@ int main(int argc, char** argv) {
   // Plan the task
   RCLCPP_INFO(logger, "Starting task planning");
   try {
-    t.plan();
-    RCLCPP_INFO(logger, "Task planning completed successfully");
+    // Ask MTC to exhaust the available alternatives.  This demo has three
+    // initial states, and limiting planning to the first solution would hide
+    // the fallback behavior for the remaining states.
+    const moveit::core::MoveItErrorCode result = t.plan(0);
+    if (result != moveit::core::MoveItErrorCode::SUCCESS || t.solutions().empty()) {
+      RCLCPP_ERROR(logger, "Task planning failed: no complete solutions were generated");
+    } else {
+      RCLCPP_INFO(logger, "Task planning succeeded with %zu complete solution(s)",
+                  t.numSolutions());
+
+      // Publish every complete solution so each initial-state/fallback branch
+      // can be selected and animated in RViz's Motion Planning Tasks panel.
+      std::size_t solution_index = 1;
+      for (const auto& solution : t.solutions()) {
+        RCLCPP_INFO(logger, "Publishing solution %zu/%zu (cost: %.3f)",
+                    solution_index, t.numSolutions(), solution->cost());
+        t.introspection().publishSolution(*solution);
+        ++solution_index;
+      }
+
+      // Print per-stage successes and failures to make it easier to correlate
+      // the RViz branches with the planner selected by Fallbacks.
+      t.printState();
+      RCLCPP_INFO(logger,
+                  "Select a top-level solution in RViz and press Play to compare paths");
+    }
   } catch (const InitStageException& e) {
     RCLCPP_ERROR(logger, "InitStageException caught: %s", e.what());
   } catch (const std::exception& e) {
@@ -216,6 +240,4 @@ int main(int argc, char** argv) {
 
   return 0;
 }
-
-
 

@@ -76,6 +76,20 @@ def generate_launch_description():
         # Get the robot name as a string for use in MoveItConfigsBuilder
         robot_name_str = LaunchConfiguration('robot_name').perform(context)
 
+        # Resolve values that control actions while the included launch file's
+        # argument scope is still active.  Leaving these as LaunchConfiguration
+        # objects makes their evaluation happen after this OpaqueFunction
+        # returns, when an outer launch may contain arguments with the same
+        # names (notably Gazebo's use_rviz:=false).
+        use_rviz_str = LaunchConfiguration('use_rviz').perform(context)
+        rviz_config_file_str = LaunchConfiguration('rviz_config_file').perform(context)
+        rviz_config_package_str = LaunchConfiguration('rviz_config_package').perform(context)
+        rviz_config_path = os.path.join(
+            FindPackageShare(rviz_config_package_str).find(rviz_config_package_str),
+            'rviz',
+            rviz_config_file_str,
+        )
+
         # Get package path
         pkg_share_moveit_config = pkg_share_moveit_config_temp.find(package_name_moveit_config)
 
@@ -98,7 +112,7 @@ def generate_launch_description():
             .joint_limits(file_path=joint_limits_file_path)
             .robot_description_kinematics(file_path=kinematics_file_path)
             .planning_pipelines(
-                pipelines=["ompl", "pilz_industrial_motion_planner", "stomp"],
+                pipelines=["ompl", "pilz_industrial_motion_planner"],
                 default_planning_pipeline="ompl"
             )
             .planning_scene_monitor(
@@ -128,13 +142,10 @@ def generate_launch_description():
 
         # Create RViz node
         start_rviz_node_cmd = Node(
-            condition=IfCondition(use_rviz),
+            condition=IfCondition(use_rviz_str),
             package="rviz2",
             executable="rviz2",
-            arguments=[
-                "-d",
-                [FindPackageShare(rviz_config_package), "/rviz/", rviz_config_file]
-            ],
+            arguments=["-d", rviz_config_path],
             output="screen",
             parameters=[
                 moveit_config.robot_description,
@@ -148,7 +159,7 @@ def generate_launch_description():
 
         # RViz exit handler
         exit_event_handler = RegisterEventHandler(
-            condition=IfCondition(use_rviz),
+            condition=IfCondition(use_rviz_str),
             event_handler=OnProcessExit(
                 target_action=start_rviz_node_cmd,
                 on_exit=EmitEvent(event=Shutdown(reason='rviz exited')),
