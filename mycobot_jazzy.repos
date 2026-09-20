@@ -1,0 +1,5 @@
+repositories:
+  moveit_task_constructor:
+    type: git
+    url: https://github.com/moveit/moveit_task_constructor.git
+    version: f16c557cb3ec9acffa0579f8d7345c26b1491e95

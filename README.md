@@ -22,6 +22,8 @@ Constructor（MTC）的抓取与放置示例。
   TF、RGB-D 话题、感知服务和执行服务是否就绪。
 - 修复多个子 launch 复用 `use_rviz` 等同名参数时的作用域污染问题，使主
   RViz 能稳定加载 Motion Planning Tasks 面板。
+- 固定经过验证的 MTC 源码版本，并自动初始化 `pybind11` 和 `scope_guard`
+  子模块，解决 `smart_holder.h` 或 `scope_guard` 缺失导致的编译失败。
 - 默认采用“只规划、不执行”模式，避免学习和调试时意外驱动仿真机器人。
 
 ## 功能概览
@@ -42,8 +44,10 @@ Constructor（MTC）的抓取与放置示例。
 - ROS 2 Jazzy
 - Gazebo Harmonic 与 `ros_gz`
 - MoveIt 2
-- MoveIt Task Constructor
 - PCL 及各 package 在 `package.xml` 中声明的依赖
+
+本仓库通过 `.repos` 文件安装经过验证的 MoveIt Task Constructor 源码版本，
+无需另外复制或手动修改 MTC、pybind11、scope_guard。
 
 建议先完成 ROS 2 Jazzy、MoveIt 2 和 Gazebo Harmonic 的安装，并确认以下
 命令可用：
@@ -56,17 +60,31 @@ gz sim --help
 
 ## 获取和构建
 
+先安装 `vcstool`，用于按清单导入固定版本的源码依赖：
+
+```bash
+sudo apt update
+sudo apt install python3-vcstool
+```
+
+然后克隆本仓库并运行依赖初始化脚本：
+
 ```bash
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 git clone https://github.com/llhan-1229/mycobot_jazzy.git
 
+cd ~/ros2_ws/src/mycobot_jazzy
+./scripts/setup_dependencies.sh
+
 cd ~/ros2_ws
-rosdep update
-rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
 ```
+
+脚本会读取 `mycobot_jazzy.repos`，将 MTC 固定到经过验证的提交，并递归下载
+其 `pybind11` 与 `scope_guard` 子模块，最后安装所有 `rosdep` 依赖。这样可以
+在其他机器上复现同一套依赖，不需要将第三方包副本提交到本仓库。
 
 每次打开新终端后都要执行：
 
@@ -234,6 +252,34 @@ Task
 - `approach_object_*`、`lift_object_*`、`retreat_*`：接近、抬升和撤离距离
 
 ## 常见问题
+
+### MTC 编译时找不到 `scope_guard` 或 `pybind11/smart_holder.h`
+
+这两个文件来自 MTC 的 Git 子模块。出现错误通常说明只克隆了 MTC 主仓库，
+但没有递归初始化子模块。回到本仓库根目录重新执行：
+
+```bash
+./scripts/setup_dependencies.sh
+```
+
+如果 MTC 已经存在，也可以直接修复它的子模块：
+
+```bash
+git -C ~/ros2_ws/src/moveit_task_constructor submodule sync --recursive
+git -C ~/ros2_ws/src/moveit_task_constructor submodule update --init --recursive
+```
+
+然后清理 MTC 的旧构建结果并重新构建：
+
+```bash
+cd ~/ros2_ws
+rm -rf build/moveit_task_constructor install/moveit_task_constructor
+colcon build --symlink-install --packages-up-to mycobot_mtc_pick_place_demo
+source install/setup.bash
+```
+
+不建议把本机手动修改后的 MTC、pybind11 或 scope_guard 上传到项目中；固定
+上游提交和自动初始化子模块更容易审查、更新和复现。
 
 ### RViz 没有出现或看不到 MTC 面板
 
