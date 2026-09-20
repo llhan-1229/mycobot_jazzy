@@ -59,7 +59,7 @@ gz sim --help
 ```bash
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
-git clone -b jazzy https://github.com/llhan-1229/mycobot_jazzy.git
+git clone https://github.com/llhan-1229/mycobot_jazzy.git
 
 cd ~/ros2_ws
 rosdep update
