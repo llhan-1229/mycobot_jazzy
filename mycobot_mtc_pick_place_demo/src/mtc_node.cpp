@@ -183,8 +183,6 @@ MTCTaskNode::MTCTaskNode(const rclcpp::NodeOptions& options)
   declare_parameter("perception_service_timeout", 30, "Seconds to wait for perception service availability and response");
   declare_parameter("repeat_execution", false, "Re-perceive, re-plan, and return the object after a successful execution");
   declare_parameter("repeat_delay", 3.0, "Wall-clock seconds to wait before the second perception request");
-  declare_parameter("repeat_perception_retries", 3, "Number of additional perception attempts for the return task");
-  declare_parameter("repeat_perception_retry_delay", 1.0, "Seconds between return-task perception attempts");
   declare_parameter("repeat_position_tolerance", 0.05, "Maximum XY distance in meters between the perceived object and the first place target");
   declare_parameter("first_arm_planner_id", "RRTConnectkConfigDefault", "OMPL planner used for the first task");
   declare_parameter("second_arm_planner_id", "RRTstarkConfigDefault", "OMPL planner used for the return task");
@@ -294,12 +292,6 @@ void MTCTaskNode::validateParameters() const
   }
   if (this->get_parameter("repeat_delay").as_double() < 0.0) {
     throw std::invalid_argument("Parameter 'repeat_delay' must be non-negative");
-  }
-  if (this->get_parameter("repeat_perception_retries").as_int() < 0) {
-    throw std::invalid_argument("Parameter 'repeat_perception_retries' must be non-negative");
-  }
-  if (this->get_parameter("repeat_perception_retry_delay").as_double() < 0.0) {
-    throw std::invalid_argument("Parameter 'repeat_perception_retry_delay' must be non-negative");
   }
   require_positive("repeat_position_tolerance");
   for (const auto& name : {"first_arm_planner_id", "second_arm_planner_id"}) {
@@ -1223,27 +1215,7 @@ int main(int argc, char** argv)
             std::chrono::duration<double>(repeat_delay)));
 
         RCLCPP_INFO(mtc_task_node->get_logger(), "Setting up planning scene for the return round");
-        const auto perception_retries =
-          mtc_task_node->get_parameter("repeat_perception_retries").as_int();
-        const auto perception_retry_delay =
-          mtc_task_node->get_parameter("repeat_perception_retry_delay").as_double();
-        bool return_scene_ready = false;
-        for (int attempt = 0; attempt <= perception_retries; ++attempt) {
-          if (attempt > 0) {
-            RCLCPP_WARN(
-              mtc_task_node->get_logger(),
-              "Return perception attempt %d failed; retrying in %.1f seconds",
-              attempt, perception_retry_delay);
-            rclcpp::sleep_for(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::duration<double>(perception_retry_delay)));
-          }
-          if (mtc_task_node->setupPlanningScene()) {
-            return_scene_ready = true;
-            break;
-          }
-        }
-        if (!return_scene_ready) {
+        if (!mtc_task_node->setupPlanningScene()) {
           throw std::runtime_error("Return planning scene setup failed");
         }
 

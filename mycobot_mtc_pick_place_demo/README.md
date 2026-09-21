@@ -68,7 +68,6 @@ parameters are in `config/get_planning_scene_server.yaml`.
 - `perception_service_timeout`: maximum wait for the scene service and response.
 - `repeat_execution`: after a successful first execution, re-perceive and return the object.
 - `repeat_delay`: wall-clock delay before the second perception request.
-- `repeat_perception_retries`, `repeat_perception_retry_delay`: retry policy for transient failures in the return-task perception request.
 - `repeat_position_tolerance`: maximum XY error from the first place target before aborting the return task.
 - `first_arm_planner_id`, `second_arm_planner_id`: OMPL planners for the two independent tasks.
 - `object_dimensions`: expected cylinder `[height, radius]` used for identification.
