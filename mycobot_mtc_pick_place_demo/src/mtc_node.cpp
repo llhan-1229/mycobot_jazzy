@@ -46,13 +46,10 @@
 #include <type_traits>
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 // Handling the GetPlanningScene service
@@ -97,17 +94,6 @@ Eigen::Isometry3d vectorToEigen(const std::vector<double>& values) {
 geometry_msgs::msg::Pose vectorToPose(const std::vector<double>& values) {
   return tf2::toMsg(vectorToEigen(values));
 };
-
-template <typename Dimensions>
-double objectHeight(const std::string& object_type, const Dimensions& dimensions) {
-  if (object_type == "cylinder") {
-    return dimensions.at(shape_msgs::msg::SolidPrimitive::CYLINDER_HEIGHT);
-  }
-  if (object_type == "box") {
-    return dimensions.at(shape_msgs::msg::SolidPrimitive::BOX_Z);
-  }
-  throw std::invalid_argument("Unsupported object type: " + object_type);
-}
 }  // namespace
 
 // Namespace alias for MoveIt Task Constructor
@@ -121,30 +107,16 @@ class MTCTaskNode : public rclcpp::Node
 public:
   MTCTaskNode(const rclcpp::NodeOptions& options);
 
-  bool doTask(
-    const std::string& round_name,
-    const std::string& arm_planner_id,
-    const std::vector<double>& place_pose);
+  bool doTask();
   bool setupPlanningScene();
-  const std::vector<double>& detectedObjectPlacePose() const;
-  bool detectedObjectIsNear(
-    const std::vector<double>& expected_place_pose,
-    double tolerance) const;
 
 private:
   mtc::Task task_;
-  mtc::Task createTask(
-    const std::string& round_name,
-    const std::string& arm_planner_id,
-    const std::vector<double>& place_pose);
+  mtc::Task createTask();
 
   void updateObjectParameters(const moveit_msgs::msg::CollisionObject& collision_object);
-  void updateDetectedObjectPlacePose(
-    const moveit_msgs::msg::CollisionObject& collision_object);
   void validateParameters() const;
-  void logPlanningExperimentMetrics(
-    const std::string& round_name,
-    const std::string& arm_planner_id) const;
+  void logPlanningExperimentMetrics() const;
 
   std::atomic_size_t grasp_pose_candidates_{ 0 };
   std::atomic_size_t grasp_ik_successes_{ 0 };
@@ -156,8 +128,6 @@ private:
   sensor_msgs::msg::Image rgb_image_;
   std::string target_object_id_;
   std::string support_surface_id_;
-  std::vector<std::string> applied_perception_object_ids_;
-  std::vector<double> detected_object_place_pose_;
   bool service_success_{ false };
 };
 
@@ -181,11 +151,6 @@ MTCTaskNode::MTCTaskNode(const rclcpp::NodeOptions& options)
   declare_parameter("execute", false, "Whether to execute the planned task");
   declare_parameter("max_solutions", 25, "Maximum number of solutions to compute");
   declare_parameter("perception_service_timeout", 30, "Seconds to wait for perception service availability and response");
-  declare_parameter("repeat_execution", false, "Re-perceive, re-plan, and return the object after a successful execution");
-  declare_parameter("repeat_delay", 3.0, "Wall-clock seconds to wait before the second perception request");
-  declare_parameter("repeat_position_tolerance", 0.05, "Maximum XY distance in meters between the perceived object and the first place target");
-  declare_parameter("first_arm_planner_id", "RRTConnectkConfigDefault", "OMPL planner used for the first task");
-  declare_parameter("second_arm_planner_id", "RRTstarkConfigDefault", "OMPL planner used for the return task");
 
   // Controller parameters
   declare_parameter(
@@ -290,15 +255,6 @@ void MTCTaskNode::validateParameters() const
   if (this->get_parameter("perception_service_timeout").as_int() <= 0) {
     throw std::invalid_argument("Parameter 'perception_service_timeout' must be greater than zero");
   }
-  if (this->get_parameter("repeat_delay").as_double() < 0.0) {
-    throw std::invalid_argument("Parameter 'repeat_delay' must be non-negative");
-  }
-  require_positive("repeat_position_tolerance");
-  for (const auto& name : {"first_arm_planner_id", "second_arm_planner_id"}) {
-    if (this->get_parameter(name).as_string().empty()) {
-      throw std::invalid_argument("Parameter '" + std::string(name) + "' must not be empty");
-    }
-  }
   if (this->get_parameter("controller_names").as_string_array().empty()) {
     throw std::invalid_argument("Parameter 'controller_names' must not be empty");
   }
@@ -383,89 +339,6 @@ void MTCTaskNode::updateObjectParameters(const moveit_msgs::msg::CollisionObject
   }
 }
 
-void MTCTaskNode::updateDetectedObjectPlacePose(
-  const moveit_msgs::msg::CollisionObject& collision_object)
-{
-  if (collision_object.primitives.empty() || collision_object.primitive_poses.empty()) {
-    throw std::runtime_error("Detected target object has no primitive pose");
-  }
-
-  const auto& primitive = collision_object.primitives.front();
-  const auto& pose = collision_object.primitive_poses.front();
-  const auto world_frame = this->get_parameter("world_frame").as_string();
-  if (collision_object.header.frame_id != world_frame) {
-    throw std::runtime_error(
-      "Detected target frame '" + collision_object.header.frame_id +
-      "' does not match world frame '" + world_frame + "'");
-  }
-
-  std::string object_type;
-  if (primitive.type == shape_msgs::msg::SolidPrimitive::CYLINDER) {
-    object_type = "cylinder";
-  } else if (primitive.type == shape_msgs::msg::SolidPrimitive::BOX) {
-    object_type = "box";
-  } else {
-    throw std::runtime_error("Detected target has an unsupported primitive type");
-  }
-
-  tf2::Quaternion quaternion;
-  tf2::fromMsg(pose.orientation, quaternion);
-  if (quaternion.length2() == 0.0) {
-    throw std::runtime_error("Detected target has an invalid zero-length orientation");
-  }
-  quaternion.normalize();
-  double roll = 0.0;
-  double pitch = 0.0;
-  double yaw = 0.0;
-  tf2::Matrix3x3(quaternion).getRPY(roll, pitch, yaw);
-
-  const double z_offset_factor =
-    this->get_parameter("place_pose_z_offset_factor").as_double();
-  const double height = objectHeight(object_type, primitive.dimensions);
-  detected_object_place_pose_ = {
-    pose.position.x,
-    pose.position.y,
-    pose.position.z - z_offset_factor * height,
-    roll,
-    pitch,
-    yaw
-  };
-
-  if (!std::all_of(
-      detected_object_place_pose_.begin(), detected_object_place_pose_.end(),
-      [](double value) { return std::isfinite(value); })) {
-    detected_object_place_pose_.clear();
-    throw std::runtime_error("Detected target pose contains non-finite values");
-  }
-
-  RCLCPP_INFO(
-    this->get_logger(),
-    "Detected target place pose: [%.4f, %.4f, %.4f, %.4f, %.4f, %.4f]",
-    detected_object_place_pose_[0], detected_object_place_pose_[1],
-    detected_object_place_pose_[2], detected_object_place_pose_[3],
-    detected_object_place_pose_[4], detected_object_place_pose_[5]);
-}
-
-const std::vector<double>& MTCTaskNode::detectedObjectPlacePose() const
-{
-  if (detected_object_place_pose_.size() != 6) {
-    throw std::runtime_error("No valid detected target pose is available");
-  }
-  return detected_object_place_pose_;
-}
-
-bool MTCTaskNode::detectedObjectIsNear(
-  const std::vector<double>& expected_place_pose,
-  double tolerance) const
-{
-  if (expected_place_pose.size() != 6 || detected_object_place_pose_.size() != 6) {
-    return false;
-  }
-  return std::hypot(
-    detected_object_place_pose_[0] - expected_place_pose[0],
-    detected_object_place_pose_[1] - expected_place_pose[1]) <= tolerance;
-}
-
 /**
  * @brief Set up the planning scene with collision objects.
  */
@@ -479,6 +352,7 @@ bool MTCTaskNode::setupPlanningScene()
   auto object_name = this->get_parameter("object_name").as_string();
   auto object_type = this->get_parameter("object_type").as_string();
   auto object_dimensions = this->get_parameter("object_dimensions").as_double_array();
+  auto object_pose_param = this->get_parameter("object_pose").as_double_array();
   auto object_reference_frame = this->get_parameter("object_reference_frame").as_string();
 
   RCLCPP_INFO(this->get_logger(), "Initial target object parameters:");
@@ -522,22 +396,6 @@ bool MTCTaskNode::setupPlanningScene()
     return false;
   }
 
-  std::unordered_set<std::string> response_object_ids;
-  for (const auto& collision_object : scene_world_.collision_objects) {
-    response_object_ids.insert(collision_object.id);
-  }
-  std::vector<std::string> stale_object_ids;
-  for (const auto& object_id : applied_perception_object_ids_) {
-    if (response_object_ids.count(object_id) == 0) {
-      stale_object_ids.push_back(object_id);
-    }
-  }
-  if (!stale_object_ids.empty()) {
-    RCLCPP_INFO(
-      this->get_logger(), "Removing %zu stale perception objects", stale_object_ids.size());
-    psi.removeCollisionObjects(stale_object_ids);
-  }
-
   // Add all collision objects to the planning scene
   RCLCPP_INFO(this->get_logger(), "Applying collision objects from service response...");
   if (!psi.applyCollisionObjects(scene_world_.collision_objects)) {
@@ -554,7 +412,6 @@ bool MTCTaskNode::setupPlanningScene()
   for (const auto& collision_object : scene_world_.collision_objects) {
     if (collision_object.id == target_object_id_) {
       updateObjectParameters(collision_object);
-      updateDetectedObjectPlacePose(collision_object);
       target_found = true;
       break;
     }
@@ -567,9 +424,6 @@ bool MTCTaskNode::setupPlanningScene()
     return false;
   }
 
-  applied_perception_object_ids_.assign(
-    response_object_ids.begin(), response_object_ids.end());
-
   RCLCPP_INFO(this->get_logger(), "Planning scene setup completed");
   return true;
 }
@@ -577,21 +431,11 @@ bool MTCTaskNode::setupPlanningScene()
 /**
  * @brief Plan and/or execute the pick and place task.
  */
-bool MTCTaskNode::doTask(
-  const std::string& round_name,
-  const std::string& arm_planner_id,
-  const std::vector<double>& place_pose)
+bool MTCTaskNode::doTask()
 {
-  if (place_pose.size() != 6) {
-    RCLCPP_ERROR(this->get_logger(), "%s task has an invalid place pose", round_name.c_str());
-    return false;
-  }
-  RCLCPP_INFO(
-    this->get_logger(),
-    "Starting %s pick-and-place task with planner '%s' and target [%.4f, %.4f, %.4f]",
-    round_name.c_str(), arm_planner_id.c_str(), place_pose[0], place_pose[1], place_pose[2]);
+  RCLCPP_INFO(this->get_logger(), "Starting the pick and place task");
 
-  task_ = createTask(round_name, arm_planner_id, place_pose);
+  task_ = createTask();
 
   // Get parameters
   auto execute = this->get_parameter("execute").as_bool();
@@ -611,7 +455,7 @@ bool MTCTaskNode::doTask(
 
   // Attempt to plan the task
   const auto planning_result = task_.plan(max_solutions);
-  logPlanningExperimentMetrics(round_name, arm_planner_id);
+  logPlanningExperimentMetrics();
   if (!planning_result)
   {
     RCLCPP_ERROR(this->get_logger(), "Task planning failed");
@@ -634,7 +478,7 @@ bool MTCTaskNode::doTask(
       RCLCPP_ERROR(this->get_logger(), "Task execution failed with error code: %d", result.val);
       return false;
     }
-    RCLCPP_INFO(this->get_logger(), "%s task executed successfully", round_name.c_str());
+    RCLCPP_INFO(this->get_logger(), "Task executed successfully");
   }
   else
   {
@@ -644,14 +488,11 @@ bool MTCTaskNode::doTask(
   return true;
 }
 
-void MTCTaskNode::logPlanningExperimentMetrics(
-  const std::string& round_name,
-  const std::string& arm_planner_id) const
+void MTCTaskNode::logPlanningExperimentMetrics() const
 {
   RCLCPP_INFO(
     this->get_logger(),
-    "EXPERIMENT_METRICS round='%s' planner='%s' grasp_pose_angle_delta=%.4f candidates=%zu ik_successes=%zu complete_solutions=%zu",
-    round_name.c_str(), arm_planner_id.c_str(),
+    "EXPERIMENT_METRICS grasp_pose_angle_delta=%.4f candidates=%zu ik_successes=%zu complete_solutions=%zu",
     this->get_parameter("grasp_pose_angle_delta").as_double(),
     grasp_pose_candidates_.load(), grasp_ik_successes_.load(), task_.numSolutions());
 
@@ -675,10 +516,7 @@ void MTCTaskNode::logPlanningExperimentMetrics(
  * @brief Create the MTC task with all necessary stages.
  * @return The created MTC task.
  */
-mtc::Task MTCTaskNode::createTask(
-  const std::string& round_name,
-  const std::string& arm_planner_id,
-  const std::vector<double>& place_pose)
+mtc::Task MTCTaskNode::createTask()
 {
   grasp_pose_candidates_ = 0;
   grasp_ik_successes_ = 0;
@@ -688,7 +526,7 @@ mtc::Task MTCTaskNode::createTask(
   mtc::Task task;
 
   // Set the name of the task
-  task.stages()->setName("pick_place_" + round_name);
+  task.stages()->setName("pick_place_task");
 
   // Load the robot model into the task
   task.loadRobotModel(shared_from_this(), "robot_description");
@@ -715,6 +553,8 @@ mtc::Task MTCTaskNode::createTask(
   auto object_type = this->get_parameter("object_type").as_string();
   auto object_reference_frame = this->get_parameter("object_reference_frame").as_string();
   auto object_dimensions = this->get_parameter("object_dimensions").as_double_array();
+  auto object_pose = this->get_parameter("object_pose").as_double_array();
+
   RCLCPP_INFO(this->get_logger(), "Creating task for object:");
   RCLCPP_INFO(this->get_logger(), "  Name: %s", object_name.c_str());
   RCLCPP_INFO(this->get_logger(), "  Type: %s", object_type.c_str());
@@ -727,6 +567,8 @@ mtc::Task MTCTaskNode::createTask(
 
   // Grasp and place parameters
   auto grasp_frame_transform = this->get_parameter("grasp_frame_transform").as_double_array();
+  auto place_pose = this->get_parameter("place_pose").as_double_array();
+
   // Motion planning parameters
   auto approach_object_min_dist = this->get_parameter("approach_object_min_dist").as_double();
   auto approach_object_max_dist = this->get_parameter("approach_object_max_dist").as_double();
@@ -767,14 +609,12 @@ mtc::Task MTCTaskNode::createTask(
   // Pipeline planner for complex movements
   // OMPL planner
   std::unordered_map<std::string, std::string> ompl_map_arm = {
-    {"ompl", arm_group_name + "[" + arm_planner_id + "]"}
+    {"ompl", arm_group_name + "[RRTConnectkConfigDefault]"}
   };
   auto ompl_planner_arm = std::make_shared<mtc::solvers::PipelinePlanner>(
     this->shared_from_this(),
     ompl_map_arm);
-  RCLCPP_INFO(
-    this->get_logger(), "OMPL planner '%s' created for the arm group",
-    arm_planner_id.c_str());
+  RCLCPP_INFO(this->get_logger(), "OMPL planner created for the arm group");
 
   // JointInterpolation is a basic planner that is used for simple motions
   // It computes quickly but doesn't support complex motions.
@@ -1074,8 +914,7 @@ mtc::Task MTCTaskNode::createTask(
       geometry_msgs::msg::PoseStamped target_pose_msg;
       target_pose_msg.header.frame_id = world_frame;
       target_pose_msg.pose = vectorToPose(place_pose);
-      target_pose_msg.pose.position.z +=
-        place_pose_z_offset_factor * objectHeight(object_type, object_dimensions);
+      target_pose_msg.pose.position.z += place_pose_z_offset_factor * object_dimensions[0];
       stage->setPose(target_pose_msg);
       stage->setMonitoredStage(attach_object_stage);  // hook into successful pick solutions
 
@@ -1185,60 +1024,15 @@ int main(int argc, char** argv)
 
     // Set up the planning scene and execute the task
     try {
-      const auto first_place_pose =
-        mtc_task_node->get_parameter("place_pose").as_double_array();
-      const auto first_arm_planner_id =
-        mtc_task_node->get_parameter("first_arm_planner_id").as_string();
-
-      RCLCPP_INFO(mtc_task_node->get_logger(), "Setting up planning scene for the first round");
+      RCLCPP_INFO(mtc_task_node->get_logger(), "Setting up planning scene");
       if (!mtc_task_node->setupPlanningScene()) {
-        throw std::runtime_error("First planning scene setup failed");
+        throw std::runtime_error("Planning scene setup failed");
       }
-      const auto initial_object_place_pose = mtc_task_node->detectedObjectPlacePose();
-
-      if (!mtc_task_node->doTask("first", first_arm_planner_id, first_place_pose)) {
-        throw std::runtime_error("First pick-and-place task failed");
+      RCLCPP_INFO(mtc_task_node->get_logger(), "Executing task");
+      if (!mtc_task_node->doTask()) {
+        throw std::runtime_error("Pick-and-place task failed");
       }
-
-      const bool execute = mtc_task_node->get_parameter("execute").as_bool();
-      const bool repeat_execution =
-        mtc_task_node->get_parameter("repeat_execution").as_bool();
-      if (execute && repeat_execution) {
-        const double repeat_delay =
-          mtc_task_node->get_parameter("repeat_delay").as_double();
-        RCLCPP_INFO(
-          mtc_task_node->get_logger(),
-          "First execution succeeded; waiting %.1f seconds before re-perception",
-          repeat_delay);
-        rclcpp::sleep_for(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::duration<double>(repeat_delay)));
-
-        RCLCPP_INFO(mtc_task_node->get_logger(), "Setting up planning scene for the return round");
-        if (!mtc_task_node->setupPlanningScene()) {
-          throw std::runtime_error("Return planning scene setup failed");
-        }
-
-        const double position_tolerance =
-          mtc_task_node->get_parameter("repeat_position_tolerance").as_double();
-        if (!mtc_task_node->detectedObjectIsNear(first_place_pose, position_tolerance)) {
-          const auto& detected_pose = mtc_task_node->detectedObjectPlacePose();
-          throw std::runtime_error(
-            "Return task aborted: perceived object at [" +
-            std::to_string(detected_pose[0]) + ", " +
-            std::to_string(detected_pose[1]) +
-            "] is not within " + std::to_string(position_tolerance) +
-            " m of the first place target");
-        }
-
-        const auto second_arm_planner_id =
-          mtc_task_node->get_parameter("second_arm_planner_id").as_string();
-        if (!mtc_task_node->doTask(
-            "return", second_arm_planner_id, initial_object_place_pose)) {
-          throw std::runtime_error("Return pick-and-place task failed");
-        }
-      }
-      RCLCPP_INFO(mtc_task_node->get_logger(), "Requested task flow completed. Keeping node alive for visualization. Press Ctrl+C to exit.");
+      RCLCPP_INFO(mtc_task_node->get_logger(), "Task execution completed. Keeping node alive for visualization. Press Ctrl+C to exit.");
 
       // Keep the node running until Ctrl+C is pressed
       executor.spin();

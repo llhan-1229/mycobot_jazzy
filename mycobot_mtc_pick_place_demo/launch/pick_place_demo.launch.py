@@ -35,7 +35,6 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     exe = LaunchConfiguration('exe')
     execute = LaunchConfiguration('execute')
-    repeat_execution = LaunchConfiguration('repeat_execution')
 
     # Get the package share directory
     pkg_share_moveit_config_temp = FindPackageShare(package=package_name_moveit_config)
@@ -63,11 +62,6 @@ def generate_launch_description():
         name='execute',
         default_value='false',
         description='Execute the best planned solution when true; otherwise only visualize it')
-
-    declare_repeat_execution_cmd = DeclareLaunchArgument(
-        name='repeat_execution',
-        default_value='false',
-        description='After a successful execution, re-perceive and plan a return task')
 
     def configure_setup(context):
         """Configure MoveIt and create nodes with proper string conversions."""
@@ -123,7 +117,6 @@ def generate_launch_description():
                 moveit_config.to_dict(),
                 {'use_sim_time': use_sim_time},
                 {'execute': ParameterValue(execute, value_type=bool)},
-                {'repeat_execution': ParameterValue(repeat_execution, value_type=bool)},
                 {'start_state': {'content': initial_positions_file_path}},
             ],
         )
@@ -138,7 +131,6 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_exe_cmd)
     ld.add_action(declare_execute_cmd)
-    ld.add_action(declare_repeat_execution_cmd)
 
     # Add the setup and node creation
     ld.add_action(OpaqueFunction(function=configure_setup))
