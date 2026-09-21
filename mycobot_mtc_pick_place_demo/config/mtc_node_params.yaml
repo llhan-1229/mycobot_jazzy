@@ -37,7 +37,9 @@ mtc_node:
 
     # Grasp and place parameters
     grasp_frame_transform: [0.0, 0.0, 0.096, 1.5708, 0.0, 0.0]
-    place_pose: [-0.183, -0.14, 0.0, 0.0, 0.0, 0.0]
+    # Keep the first placement on the tabletop and inside the head-camera view.
+    # The previous negative-x/negative-y target was outside the sensed workspace.
+    place_pose: [0.22, 0.22, 0.0, 0.0, 0.0, 0.0]
 
     # Motion planning parameters
     approach_object_min_dist: 0.0015
