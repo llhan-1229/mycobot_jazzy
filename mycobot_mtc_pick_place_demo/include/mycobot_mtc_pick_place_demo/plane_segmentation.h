@@ -76,7 +76,7 @@ segmentPlaneAndObjects(
     double crop_max_z = std::numeric_limits<double>::max(),
     int max_iterations = 100,
     double distance_threshold = 0.01,
-    double z_tolerance = 0.03,
+    double z_tolerance = 0.06,
     double angle_tolerance = cos(2.5 * M_PI / 180.0),
     int min_cluster_size = 100,
     int max_cluster_size = 25000,

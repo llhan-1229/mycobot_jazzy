@@ -138,6 +138,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
   double shape_fitting_max_radius;
   double shape_fitting_normal_distance_weight;
   double shape_fitting_normal_search_radius;
+  double minimum_target_similarity;
 
   // For output pcd (point cloud) files
   std::string output_directory;
@@ -185,7 +186,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
     // Declare parameters for plane and object segmentation
     declare_parameter("max_iterations", 100, "Maximum iterations for RANSAC");
     declare_parameter("distance_threshold", 0.01, "Distance threshold for RANSAC");
-    declare_parameter("z_tolerance", 0.03, "Tolerance for z-coordinate of the support plane");
+    declare_parameter("z_tolerance", 0.06, "Tolerance for z-coordinate of the support plane");
     declare_parameter("angle_tolerance", 0.9990482216, "Angle tolerance for surface normals");
     declare_parameter("plane_segmentation_threshold", 0.001, "Threshold for plane segmentation");
     declare_parameter("min_cluster_size", 100, "Minimum size of a cluster");
@@ -244,6 +245,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
     declare_parameter("shape_fitting_max_radius", 0.1, "Maximum radius for cylinder fitting (in meters)");
     declare_parameter("shape_fitting_normal_distance_weight", 0.1, "Normal distance weight for cylinder fitting");
     declare_parameter("shape_fitting_normal_search_radius", 0.05, "Search radius for normal estimation in shape fitting (in meters)");
+    declare_parameter("minimum_target_similarity", 0.8, "Minimum similarity score required to accept a target object");
 
     // Output directory for point clouds. Useful for debugging
     // ros2 run pcl_ros pcd_to_pointcloud --ros-args -p file_name:=/home/ubuntu/Downloads/my_debug_cloud.pcd -p frame_id:=base_link -p interval:=1.0
@@ -327,6 +329,10 @@ class GetPlanningSceneServer : public rclcpp::Node {
     shape_fitting_max_radius = this->get_parameter("shape_fitting_max_radius").as_double();
     shape_fitting_normal_distance_weight = this->get_parameter("shape_fitting_normal_distance_weight").as_double();
     shape_fitting_normal_search_radius = this->get_parameter("shape_fitting_normal_search_radius").as_double();
+    minimum_target_similarity = this->get_parameter("minimum_target_similarity").as_double();
+    if (minimum_target_similarity < 0.0 || minimum_target_similarity > 1.0) {
+      throw std::invalid_argument("minimum_target_similarity must be in the range [0, 1]");
+    }
 
     // Output directory for point cloud files
     output_directory = this->get_parameter("output_directory").as_string();
@@ -788,16 +794,23 @@ class GetPlanningSceneServer : public rclcpp::Node {
       }
     }
 
-    if (!best_match_id.empty()) {
+    if (!best_match_id.empty() && best_score >= minimum_target_similarity) {
       RCLCPP_INFO(this->get_logger(),
-                  "Best matching object found: %s with similarity score: %.2f",
-                  best_match_id.c_str(), best_score);
+                  "Target object accepted: %s with similarity score %.2f (minimum %.2f)",
+                  best_match_id.c_str(), best_score, minimum_target_similarity);
+      return best_match_id;
+    }
+
+    if (!best_match_id.empty()) {
+      RCLCPP_WARN(this->get_logger(),
+                  "Best matching object %s scored %.2f, below the minimum similarity %.2f",
+                  best_match_id.c_str(), best_score, minimum_target_similarity);
     } else {
       RCLCPP_WARN(this->get_logger(),
                   "No matching object found for the target shape and dimensions");
     }
 
-    return best_match_id;
+    return {};
   }
 
   moveit_msgs::msg::PlanningSceneWorld assemblePlanningSceneWorld(
