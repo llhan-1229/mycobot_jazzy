@@ -21,6 +21,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     execute = LaunchConfiguration('execute')
+    repeat_execution = LaunchConfiguration('repeat_execution')
     perception_debug = LaunchConfiguration('perception_debug')
     startup_timeout = LaunchConfiguration('startup_timeout')
     use_rviz = LaunchConfiguration('use_rviz')
@@ -90,6 +91,7 @@ def generate_launch_description():
                 launch_arguments={
                     'use_sim_time': 'true',
                     'execute': execute,
+                    'repeat_execution': repeat_execution,
                 }.items()),
         ]
 
@@ -97,6 +99,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'execute', default_value='false',
             description='Execute the planned task; false only publishes the solution'),
+        DeclareLaunchArgument(
+            'repeat_execution', default_value='false',
+            description='After a successful execution, re-perceive and return the object'),
         DeclareLaunchArgument(
             'use_rviz', default_value='true',
             description='Start RViz with the MTC panel'),

@@ -4,6 +4,11 @@ mtc_node:
     execute: false
     max_solutions: 25
     perception_service_timeout: 30
+    repeat_execution: false
+    repeat_delay: 3.0
+    repeat_position_tolerance: 0.05
+    first_arm_planner_id: "RRTConnectkConfigDefault"
+    second_arm_planner_id: "RRTstarkConfigDefault"
 
     # Controller parameters
     controller_names:

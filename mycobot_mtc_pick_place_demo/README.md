@@ -40,6 +40,14 @@ Execute the best solution in Gazebo:
 ros2 launch mycobot_mtc_pick_place_demo pick_place_system.launch.py execute:=true
 ```
 
+Execute a second, independently perceived and planned task that returns the object
+to its initially perceived position:
+
+```bash
+ros2 launch mycobot_mtc_pick_place_demo pick_place_system.launch.py \
+  execute:=true repeat_execution:=true
+```
+
 Show a second RViz window with the live camera point cloud:
 
 ```bash
@@ -58,6 +66,10 @@ parameters are in `config/get_planning_scene_server.yaml`.
 - `execute`: false publishes the solution; true also executes it.
 - `max_solutions`: maximum number of MTC solutions to generate.
 - `perception_service_timeout`: maximum wait for the scene service and response.
+- `repeat_execution`: after a successful first execution, re-perceive and return the object.
+- `repeat_delay`: wall-clock delay before the second perception request.
+- `repeat_position_tolerance`: maximum XY error from the first place target before aborting the return task.
+- `first_arm_planner_id`, `second_arm_planner_id`: OMPL planners for the two independent tasks.
 - `object_dimensions`: expected cylinder `[height, radius]` used for identification.
 - `place_pose`: target `[x, y, z, roll, pitch, yaw]` in `base_link`.
 - `crop_min_*` and `crop_max_*`: point-cloud region of interest.
