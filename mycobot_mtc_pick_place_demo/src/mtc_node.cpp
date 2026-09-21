@@ -1261,21 +1261,8 @@ int main(int argc, char** argv)
 
         const auto second_arm_planner_id =
           mtc_task_node->get_parameter("second_arm_planner_id").as_string();
-
-        // Keep the measured A position, but reuse the first round's known-good
-        // placement orientation. The perception service reports the object's
-        // world orientation, which is not necessarily a feasible end-effector
-        // orientation for the return placement IK.
-        auto return_place_pose = initial_object_place_pose;
-        std::copy(first_place_pose.begin() + 3, first_place_pose.end(),
-          return_place_pose.begin() + 3);
-        RCLCPP_INFO(
-          mtc_task_node->get_logger(),
-          "Return placement target: position=[%.4f, %.4f, %.4f], rpy=[%.4f, %.4f, %.4f]",
-          return_place_pose[0], return_place_pose[1], return_place_pose[2],
-          return_place_pose[3], return_place_pose[4], return_place_pose[5]);
         if (!mtc_task_node->doTask(
-            "return", second_arm_planner_id, return_place_pose)) {
+            "return", second_arm_planner_id, initial_object_place_pose)) {
           throw std::runtime_error("Return pick-and-place task failed");
         }
       }
