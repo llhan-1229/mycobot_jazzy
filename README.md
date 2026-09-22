@@ -15,7 +15,6 @@ Constructor（MTC）的抓取与放置示例。
   `DisplayMotionPath` 适配器，防止规划器把穿过障碍物的轨迹当作成功结果。
 - 改进 MTC Fallback 示例：搜索并发布全部完整解，便于在 RViz 中比较
   Cartesian、Pilz 和 OMPL 的回退过程。
-- 新增 `mycobot_moveit_studying` 学习包，包含基础 MoveIt 运动和避障示例。
 - 扩展感知抓放任务：增加参数校验、服务超时、错误处理、规划统计和
   `execute` 开关。
 - 新增一键启动的 `pick_place_system.launch.py`，在启动 MTC 前检查控制器、
@@ -25,6 +24,7 @@ Constructor（MTC）的抓取与放置示例。
 - 固定经过验证的 MTC 源码版本，并自动初始化 `pybind11` 和 `scope_guard`
   子模块，解决 `smart_holder.h` 或 `scope_guard` 缺失导致的编译失败。
 - 默认采用“只规划、不执行”模式，避免学习和调试时意外驱动仿真机器人。
+- 新增颜色识别功能，添加同尺寸蓝色圆柱
 
 ## 功能概览
 
