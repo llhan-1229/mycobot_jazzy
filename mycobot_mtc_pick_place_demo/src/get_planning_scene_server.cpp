@@ -37,6 +37,7 @@
 #include "mycobot_mtc_pick_place_demo/normals_curvature_and_rsd_estimation.h"
 #include "mycobot_mtc_pick_place_demo/object_segmentation.h"
 #include "mycobot_mtc_pick_place_demo/plane_segmentation.h"
+#include "mycobot_mtc_pick_place_demo/target_selection.h"
 #include <mycobot_interfaces/srv/get_planning_scene.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -139,6 +140,9 @@ class GetPlanningSceneServer : public rclcpp::Node {
   double shape_fitting_normal_distance_weight;
   double shape_fitting_normal_search_radius;
   double minimum_target_similarity;
+  double color_min_saturation;
+  double color_min_value;
+  double color_min_confidence;
 
   // For output pcd (point cloud) files
   std::string output_directory;
@@ -246,6 +250,9 @@ class GetPlanningSceneServer : public rclcpp::Node {
     declare_parameter("shape_fitting_normal_distance_weight", 0.1, "Normal distance weight for cylinder fitting");
     declare_parameter("shape_fitting_normal_search_radius", 0.05, "Search radius for normal estimation in shape fitting (in meters)");
     declare_parameter("minimum_target_similarity", 0.8, "Minimum similarity score required to accept a target object");
+    declare_parameter("color_min_saturation", 0.4, "Minimum HSV saturation for color voting");
+    declare_parameter("color_min_value", 0.1, "Minimum HSV value for color voting");
+    declare_parameter("color_min_confidence", 0.6, "Minimum winning color vote fraction");
 
     // Output directory for point clouds. Useful for debugging
     // ros2 run pcl_ros pcd_to_pointcloud --ros-args -p file_name:=/home/ubuntu/Downloads/my_debug_cloud.pcd -p frame_id:=base_link -p interval:=1.0
@@ -332,6 +339,14 @@ class GetPlanningSceneServer : public rclcpp::Node {
     minimum_target_similarity = this->get_parameter("minimum_target_similarity").as_double();
     if (minimum_target_similarity < 0.0 || minimum_target_similarity > 1.0) {
       throw std::invalid_argument("minimum_target_similarity must be in the range [0, 1]");
+    }
+    color_min_saturation = this->get_parameter("color_min_saturation").as_double();
+    color_min_value = this->get_parameter("color_min_value").as_double();
+    color_min_confidence = this->get_parameter("color_min_confidence").as_double();
+    for (const auto value : { color_min_saturation, color_min_value, color_min_confidence }) {
+      if (value < 0.0 || value > 1.0) {
+        throw std::invalid_argument("Color thresholds must be in the range [0, 1]");
+      }
     }
 
     // Output directory for point cloud files
@@ -734,85 +749,6 @@ class GetPlanningSceneServer : public rclcpp::Node {
     return collision_object;
   }
 
-  std::string identifyTargetObject(
-      const std::vector<moveit_msgs::msg::CollisionObject>& objects,
-      const std::string& target_shape,
-      const std::vector<double>& target_dimensions) {
-
-    double best_score = 0.0;
-    std::string best_match_id;
-
-    for (const auto& object : objects) {
-      if (object.primitives.empty()) continue;
-
-      const auto& primitive = object.primitives[0];
-      double shape_score = 0.0;
-      double dimension_score = 0.0;
-
-      // Compare shape types
-      if ((target_shape == "cylinder" && primitive.type == shape_msgs::msg::SolidPrimitive::CYLINDER) ||
-          (target_shape == "box" && primitive.type == shape_msgs::msg::SolidPrimitive::BOX)) {
-        shape_score = 1.0;
-      } else {
-        continue; // Skip to next object if shape doesn't match
-      }
-
-      // Compare dimensions
-      std::vector<double> object_dimensions;
-      switch (primitive.type) {
-        case shape_msgs::msg::SolidPrimitive::CYLINDER:
-          object_dimensions = {primitive.dimensions[primitive.CYLINDER_HEIGHT],
-                               primitive.dimensions[primitive.CYLINDER_RADIUS]};
-          break;
-        case shape_msgs::msg::SolidPrimitive::BOX:
-          object_dimensions = {primitive.dimensions[primitive.BOX_X],
-                               primitive.dimensions[primitive.BOX_Y],
-                               primitive.dimensions[primitive.BOX_Z]};
-          break;
-        default:
-          continue; // Skip to next object if shape is neither cylinder nor box
-      }
-
-      // Calculate dimension similarity score
-      if (object_dimensions.size() == target_dimensions.size()) {
-        double total_diff = 0.0;
-        for (size_t i = 0; i < object_dimensions.size(); ++i) {
-          double diff = std::abs(object_dimensions[i] - target_dimensions[i]);
-          total_diff += diff / target_dimensions[i]; // Normalize the difference
-        }
-        dimension_score = 1.0 - (total_diff / object_dimensions.size()); // Average normalized similarity
-        dimension_score = std::max(0.0, dimension_score); // Ensure non-negative score
-      }
-
-      // Calculate overall similarity score
-      double similarity_score = 0.7 * shape_score + 0.3 * dimension_score;
-
-      // Update best match if this object has a higher similarity score
-      if (similarity_score > best_score) {
-        best_score = similarity_score;
-        best_match_id = object.id;
-      }
-    }
-
-    if (!best_match_id.empty() && best_score >= minimum_target_similarity) {
-      RCLCPP_INFO(this->get_logger(),
-                  "Target object accepted: %s with similarity score %.2f (minimum %.2f)",
-                  best_match_id.c_str(), best_score, minimum_target_similarity);
-      return best_match_id;
-    }
-
-    if (!best_match_id.empty()) {
-      RCLCPP_WARN(this->get_logger(),
-                  "Best matching object %s scored %.2f, below the minimum similarity %.2f",
-                  best_match_id.c_str(), best_score, minimum_target_similarity);
-    } else {
-      RCLCPP_WARN(this->get_logger(),
-                  "No matching object found for the target shape and dimensions");
-    }
-
-    return {};
-  }
-
   moveit_msgs::msg::PlanningSceneWorld assemblePlanningSceneWorld(
     const std::vector<moveit_msgs::msg::CollisionObject>& collision_objects) {
 
@@ -896,6 +832,11 @@ class GetPlanningSceneServer : public rclcpp::Node {
     const std::vector<std::string> valid_shapes = {"cylinder", "box"};
     if (std::find(valid_shapes.begin(), valid_shapes.end(), request->target_shape) == valid_shapes.end()) {
       RCLCPP_ERROR(this->get_logger(), "Invalid target_shape: %s", request->target_shape.c_str());
+      return;
+    }
+    const std::vector<std::string> valid_colors = {"red", "blue"};
+    if (std::find(valid_colors.begin(), valid_colors.end(), request->target_color) == valid_colors.end()) {
+      RCLCPP_ERROR(this->get_logger(), "Invalid target_color: %s", request->target_color.c_str());
       return;
     }
 
@@ -1040,7 +981,7 @@ class GetPlanningSceneServer : public rclcpp::Node {
      *    - Segment the point cloud clusters into distinct collision objects.          *
      *                                                                                 *
      **********************************************************************************/
-    std::vector<moveit_msgs::msg::CollisionObject> segmented_objects = segmentObjects(
+    std::vector<SegmentedObject> segmented_objects = segmentObjects(
       clusters,
       num_iterations,
       target_frame,
@@ -1061,14 +1002,20 @@ class GetPlanningSceneServer : public rclcpp::Node {
       line_curvature_threshold,
       line_cluster_tolerance,
       line_rho_threshold,
-      line_theta_threshold
+      line_theta_threshold,
+      color_min_saturation,
+      color_min_value,
+      color_min_confidence
     );
 
     RCLCPP_INFO(this->get_logger(), "Segmented %zu objects from the point cloud clusters", segmented_objects.size());
 
     // Add segmented objects to the planning scene
     for (const auto& object : segmented_objects) {
-      response->scene_world.collision_objects.push_back(object);
+      response->scene_world.collision_objects.push_back(object.collision_object);
+      RCLCPP_INFO(this->get_logger(),
+        "Detected object %s: color=%s, confidence=%.3f",
+        object.collision_object.id.c_str(), object.color.c_str(), object.color_confidence);
     }
 
     /***********************************************************************************
@@ -1078,13 +1025,24 @@ class GetPlanningSceneServer : public rclcpp::Node {
      *     - If no target found, log a warning                                         *
      *                                                                                 *
      **********************************************************************************/
-    std::string target_object_id = identifyTargetObject(
-      response->scene_world.collision_objects,
+    const auto selection = selectTargetObject(
+      segmented_objects,
       request->target_shape,
-      request->target_dimensions);
+      request->target_dimensions,
+      request->target_color,
+      minimum_target_similarity,
+      color_min_confidence);
+    const std::string& target_object_id = selection.object_id;
 
     if (!target_object_id.empty()) {
       response->target_object_id = target_object_id;
+      RCLCPP_INFO(this->get_logger(),
+        "Target object accepted: %s, color=%s, similarity=%.3f",
+        target_object_id.c_str(), request->target_color.c_str(), selection.similarity);
+    } else {
+      RCLCPP_WARN(this->get_logger(),
+        "No %s %s matched the requested dimensions and color confidence threshold",
+        request->target_color.c_str(), request->target_shape.c_str());
     }
 
     /***********************************************************************************

@@ -175,6 +175,10 @@ MTCTaskNode::MTCTaskNode(const rclcpp::NodeOptions& options)
   declare_parameter("object_reference_frame", "base_link", "Reference frame for the object");
   declare_parameter("object_dimensions", std::vector<double>{0.35, 0.0125}, "Dimensions of the object [height, radius]");
   declare_parameter("object_pose", std::vector<double>{0.22, 0.12, 0.0, 0.0, 0.0, 0.0}, "Initial pose of the object [x, y, z, roll, pitch, yaw]");
+  declare_parameter("target_color", "red", "Required target color: red or blue");
+  declare_parameter(
+    "non_target_cylinder_padding", 0.006,
+    "Radial collision padding for non-target cylinders (meters)");
 
   // Grasp and place parameters
   declare_parameter("grasp_frame_transform", std::vector<double>{0.0, 0.0, 0.096, 1.5708, 0.0, 0.0}, "Transform from gripper frame to grasp frame [x, y, z, roll, pitch, yaw]");
@@ -267,6 +271,13 @@ void MTCTaskNode::validateParameters() const
     throw std::invalid_argument(
       "Parameter 'object_dimensions' must contain positive cylinder [height, radius] or box [x, y, z] dimensions");
   }
+  const auto target_color = this->get_parameter("target_color").as_string();
+  if (target_color != "red" && target_color != "blue") {
+    throw std::invalid_argument("Parameter 'target_color' must be either 'red' or 'blue'");
+  }
+  if (this->get_parameter("non_target_cylinder_padding").as_double() < 0.0) {
+    throw std::invalid_argument("Parameter 'non_target_cylinder_padding' must be non-negative");
+  }
 
   require_pose("object_pose");
   require_pose("grasp_frame_transform");
@@ -354,6 +365,7 @@ bool MTCTaskNode::setupPlanningScene()
   auto object_dimensions = this->get_parameter("object_dimensions").as_double_array();
   auto object_pose_param = this->get_parameter("object_pose").as_double_array();
   auto object_reference_frame = this->get_parameter("object_reference_frame").as_string();
+  auto target_color = this->get_parameter("target_color").as_string();
 
   RCLCPP_INFO(this->get_logger(), "Initial target object parameters:");
   RCLCPP_INFO(this->get_logger(), "  Name: %s", object_name.c_str());
@@ -365,6 +377,7 @@ bool MTCTaskNode::setupPlanningScene()
                                 return std::move(a) + ", " + std::to_string(b);
                               }).c_str());
   RCLCPP_INFO(this->get_logger(), "  Reference frame: %s", object_reference_frame.c_str());
+  RCLCPP_INFO(this->get_logger(), "  Target color: %s", target_color.c_str());
 
   RCLCPP_INFO(this->get_logger(), "Sending GetPlanningScene service request...");
 
@@ -372,7 +385,7 @@ bool MTCTaskNode::setupPlanningScene()
   const auto service_timeout = std::chrono::seconds(
     this->get_parameter("perception_service_timeout").as_int());
   auto response = planning_scene_client->call_service(
-    object_type, object_dimensions, service_timeout);
+    object_type, object_dimensions, target_color, service_timeout);
 
   RCLCPP_INFO(this->get_logger(), "Service call to the GetPlanningScene service completed.");
 
@@ -396,24 +409,25 @@ bool MTCTaskNode::setupPlanningScene()
     return false;
   }
 
-  // Add all collision objects to the planning scene
-  RCLCPP_INFO(this->get_logger(), "Applying collision objects from service response...");
-  if (!psi.applyCollisionObjects(scene_world_.collision_objects)) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to add collision objects from service response");
-    return false;
-  } else {
-      RCLCPP_INFO(this->get_logger(), "Successfully added %zu collision objects from service response to the planning scene",
-      scene_world_.collision_objects.size());
-  }
-
   // Find the target object in the collision objects and update parameters
   RCLCPP_INFO(this->get_logger(), "Received target_object_id from service: '%s'", target_object_id_.c_str());
   bool target_found = false;
-  for (const auto& collision_object : scene_world_.collision_objects) {
+  for (auto& collision_object : scene_world_.collision_objects) {
     if (collision_object.id == target_object_id_) {
       updateObjectParameters(collision_object);
       target_found = true;
-      break;
+      continue;
+    }
+
+    const double padding = this->get_parameter("non_target_cylinder_padding").as_double();
+    for (auto& primitive : collision_object.primitives) {
+      if (primitive.type == shape_msgs::msg::SolidPrimitive::CYLINDER &&
+          primitive.dimensions.size() > shape_msgs::msg::SolidPrimitive::CYLINDER_RADIUS) {
+        primitive.dimensions[shape_msgs::msg::SolidPrimitive::CYLINDER_RADIUS] += padding;
+        RCLCPP_INFO(this->get_logger(),
+          "Applied %.4f m radial collision padding to non-target object '%s'",
+          padding, collision_object.id.c_str());
+      }
     }
   }
 
@@ -423,6 +437,16 @@ bool MTCTaskNode::setupPlanningScene()
       target_object_id_.c_str());
     return false;
   }
+
+  // Preserve the grasp geometry while conservatively padding all cylinder obstacles.
+  RCLCPP_INFO(this->get_logger(), "Applying collision objects from service response...");
+  if (!psi.applyCollisionObjects(scene_world_.collision_objects)) {
+    RCLCPP_ERROR(this->get_logger(), "Failed to add collision objects from service response");
+    return false;
+  }
+  RCLCPP_INFO(this->get_logger(),
+    "Successfully added %zu collision objects from service response to the planning scene",
+    scene_world_.collision_objects.size());
 
   RCLCPP_INFO(this->get_logger(), "Planning scene setup completed");
   return true;

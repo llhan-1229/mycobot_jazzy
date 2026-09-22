@@ -94,6 +94,13 @@ add_custom_library(get_planning_scene_client)
 add_custom_library(normals_curvature_and_rsd_estimation ${PCL_LIBS})
 add_custom_library(object_segmentation ${PCL_LIBS})
 add_custom_library(plane_segmentation ${PCL_LIBRARIES})
+add_library(target_selection STATIC src/target_selection.cpp)
+target_include_directories(target_selection PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(target_selection ${dependencies})
+target_link_libraries(object_segmentation normals_curvature_and_rsd_estimation)
 
 # Executables
 ## get_planning_scene_client_node
@@ -113,6 +120,7 @@ target_link_libraries(get_planning_scene_server
   normals_curvature_and_rsd_estimation
   object_segmentation
   plane_segmentation
+  target_selection
   ${PCL_LIBS}
 )
 
@@ -134,6 +142,7 @@ set(LIBRARIES
   normals_curvature_and_rsd_estimation
   object_segmentation
   plane_segmentation
+  target_selection
 )
 
 install(TARGETS ${EXECUTABLES}
@@ -166,10 +175,22 @@ install(FILES
 
 # Testing
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_color_targeting test/test_color_targeting.cpp)
+  if(TARGET test_color_targeting)
+    target_include_directories(test_color_targeting PUBLIC include ${PCL_INCLUDE_DIRS})
+    ament_target_dependencies(test_color_targeting ${dependencies})
+    target_link_libraries(test_color_targeting
+      object_segmentation
+      target_selection
+      ${PCL_LIBS}
+    )
+  endif()
 endif()
 
 # Export and package

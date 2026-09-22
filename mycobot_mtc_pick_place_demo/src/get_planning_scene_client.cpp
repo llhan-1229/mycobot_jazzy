@@ -39,6 +39,7 @@ GetPlanningSceneClient::PlanningSceneResponse
 GetPlanningSceneClient::call_service(
   const std::string& target_shape,
   const std::vector<double>& target_dimensions,
+  const std::string& target_color,
   std::chrono::seconds timeout)
 {
   PlanningSceneResponse response;
@@ -55,6 +56,7 @@ GetPlanningSceneClient::call_service(
   auto request = std::make_shared<mycobot_interfaces::srv::GetPlanningScene::Request>();
   request->target_shape = target_shape;
   request->target_dimensions = target_dimensions;
+  request->target_color = target_color;
 
   // Send the request asynchronously
   auto result_future = client_->async_send_request(request);
@@ -131,9 +133,10 @@ int main(int argc, char** argv)
   // Example input parameters
   std::string target_shape = "cylinder";
   std::vector<double> target_dimensions = {0.35, 0.0125};
+  std::string target_color = "red";
 
   // Call the service
-  auto response = node->call_service(target_shape, target_dimensions);
+  auto response = node->call_service(target_shape, target_dimensions, target_color);
 
   // Process the response
   if (response.success) {

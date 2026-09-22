@@ -30,6 +30,7 @@
 #include <sstream>                                // For std::ostringstream in logging
 #include <set>                                    // For removing inliers of valid models from a point cloud cluster
 #include <random>                                 // For RANSAC-based model fitting
+#include <string>
 
 #include <Eigen/Dense>                            // For Eigen::MatrixXi
 #include <unsupported/Eigen/CXX11/Tensor>         // For Eigen::Tensor
@@ -49,6 +50,24 @@
 #include <tf2/LinearMath/Matrix3x3.h>   // For conversion between quaternions and Euler angles
 
 #include "mycobot_mtc_pick_place_demo/normals_curvature_and_rsd_estimation.h" // For LOG_INFO implementation
+
+struct ColorClassification {
+  std::string color{ "unknown" };
+  double confidence{ 0.0 };
+  std::size_t chromatic_points{ 0 };
+};
+
+struct SegmentedObject {
+  moveit_msgs::msg::CollisionObject collision_object;
+  std::string color{ "unknown" };
+  double color_confidence{ 0.0 };
+};
+
+ColorClassification classifyClusterColor(
+    const pcl::PointCloud<PointXYZRGBNormalRSD>::Ptr& cluster,
+    double minimum_saturation,
+    double minimum_value,
+    double minimum_confidence);
 
 /**
  * @brief Fits a 2D line to two points.
@@ -314,9 +333,9 @@ fitBoxToCluster(
  * @param line_cluster_tolerance The maximum distance between two points to be considered in the same cluster for lines.
  * @param line_rho_threshold Threshold for considering two rho values similar when clustering lines.
  * @param line_theta_threshold Threshold for considering two theta values similar when clustering lines.
- * @return std::vector<moveit_msgs::msg::CollisionObject> Vector of collision objects.
+ * @return Vector of collision objects with color classification metadata.
  */
-std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
+std::vector<SegmentedObject> segmentObjects(
     const std::vector<pcl::PointCloud<PointXYZRGBNormalRSD>::Ptr>& cloud_clusters,
     int num_iterations,
     const std::string& frame_id,
@@ -337,6 +356,9 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
     double line_curvature_threshold,
     double line_cluster_tolerance,
     double line_rho_threshold,
-    double line_theta_threshold);
+    double line_theta_threshold,
+    double color_min_saturation,
+    double color_min_value,
+    double color_min_confidence);
 
 #endif // OBJECT_SEGMENTATION_H

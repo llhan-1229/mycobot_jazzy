@@ -20,6 +20,64 @@
 
 #include "mycobot_mtc_pick_place_demo/object_segmentation.h"
 
+ColorClassification classifyClusterColor(
+    const pcl::PointCloud<PointXYZRGBNormalRSD>::Ptr& cluster,
+    double minimum_saturation,
+    double minimum_value,
+    double minimum_confidence)
+{
+  ColorClassification result;
+  if (!cluster) {
+    return result;
+  }
+
+  std::size_t red_votes = 0;
+  std::size_t blue_votes = 0;
+  for (const auto& point : cluster->points) {
+    const double red = point.r / 255.0;
+    const double green = point.g / 255.0;
+    const double blue = point.b / 255.0;
+    const double maximum = std::max({ red, green, blue });
+    const double minimum = std::min({ red, green, blue });
+    const double delta = maximum - minimum;
+    const double saturation = maximum == 0.0 ? 0.0 : delta / maximum;
+
+    if (saturation < minimum_saturation || maximum < minimum_value || delta == 0.0) {
+      continue;
+    }
+
+    double hue = 0.0;
+    if (maximum == red) {
+      hue = 60.0 * std::fmod((green - blue) / delta, 6.0);
+    } else if (maximum == green) {
+      hue = 60.0 * (((blue - red) / delta) + 2.0);
+    } else {
+      hue = 60.0 * (((red - green) / delta) + 4.0);
+    }
+    if (hue < 0.0) {
+      hue += 360.0;
+    }
+
+    ++result.chromatic_points;
+    if (hue <= 20.0 || hue >= 340.0) {
+      ++red_votes;
+    } else if (hue >= 190.0 && hue <= 250.0) {
+      ++blue_votes;
+    }
+  }
+
+  if (result.chromatic_points == 0 || red_votes == blue_votes) {
+    return result;
+  }
+
+  const std::size_t winning_votes = std::max(red_votes, blue_votes);
+  result.confidence = static_cast<double>(winning_votes) / result.chromatic_points;
+  if (result.confidence >= minimum_confidence) {
+    result.color = red_votes > blue_votes ? "red" : "blue";
+  }
+  return result;
+}
+
 // Line fitting helpers
 // Computes the coefficients (a, b, c) of a 2D line in the form a*x + b*y + c = 0
 // that passes through two points p1 and p2.
@@ -632,7 +690,7 @@ fitBoxToCluster(
   return std::make_tuple(primitive, pose);
 }
 
-std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
+std::vector<SegmentedObject> segmentObjects(
     const std::vector<pcl::PointCloud<PointXYZRGBNormalRSD>::Ptr>& cloud_clusters,
     int num_iterations,
     const std::string& frame_id,
@@ -653,9 +711,12 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
     double line_curvature_threshold,
     double line_cluster_tolerance,
     double line_rho_threshold,
-    double line_theta_threshold) {
+    double line_theta_threshold,
+    double color_min_saturation,
+    double color_min_value,
+    double color_min_confidence) {
 
-  std::vector<moveit_msgs::msg::CollisionObject> collision_objects;
+  std::vector<SegmentedObject> collision_objects;
   int box_count = 0;
   int cylinder_count = 0;
 
@@ -667,6 +728,8 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
    *                                                  *
    ***************************************************/
   for (const auto& cluster : cloud_clusters) {
+    const auto color = classifyClusterColor(
+      cluster, color_min_saturation, color_min_value, color_min_confidence);
 
     /****************************************************
      *                                                  *
@@ -1150,7 +1213,7 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
       collision_object.primitive_poses.push_back(cylinder_pose);
       collision_object.operation = moveit_msgs::msg::CollisionObject::ADD;
 
-      collision_objects.push_back(collision_object);
+      collision_objects.push_back({ collision_object, color.color, color.confidence });
 
       // Extract yaw from quaternion for logging
       tf2::Quaternion q(
@@ -1168,7 +1231,9 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
              << ", position=(" << cylinder_pose.position.x
              << ", " << cylinder_pose.position.y
              << ", " << cylinder_pose.position.z << ")"
-             << ", yaw=" << yaw;
+             << ", yaw=" << yaw
+             << ", color=" << color.color
+             << ", color_confidence=" << color.confidence;
       LOG_INFO(log_stream.str());
     } else if (top_model_type == "line") {
       double rho = top_model_parameters[0];
@@ -1184,7 +1249,7 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
       collision_object.primitive_poses.push_back(box_pose);
       collision_object.operation = moveit_msgs::msg::CollisionObject::ADD;
 
-      collision_objects.push_back(collision_object);
+      collision_objects.push_back({ collision_object, color.color, color.confidence });
 
       // Extract yaw from quaternion for logging
       tf2::Quaternion q(
@@ -1206,7 +1271,9 @@ std::vector<moveit_msgs::msg::CollisionObject> segmentObjects(
                  << ", position=(" << box_pose.position.x
                  << ", " << box_pose.position.y
                  << ", " << box_pose.position.z << ")"
-                 << ", yaw=" << yaw;
+                 << ", yaw=" << yaw
+                 << ", color=" << color.color
+                 << ", color_confidence=" << color.confidence;
       LOG_INFO(log_stream.str());
     }
     LOG_INFO("");

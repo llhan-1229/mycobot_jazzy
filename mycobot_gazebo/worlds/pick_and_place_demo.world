@@ -52,6 +52,12 @@
       <pose>0.22 0.12 0.175 0 0 0</pose>
     </include>
 
+    <include>
+      <uri>model://blue_cylinder</uri>
+      <name>blue_cylinder</name>
+      <pose>0.12 0.22 0.175 0 0 0</pose>
+    </include>
+
     <!-- Include the other objects -->
 
     <include>

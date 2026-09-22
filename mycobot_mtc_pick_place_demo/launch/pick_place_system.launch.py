@@ -24,6 +24,7 @@ def generate_launch_description():
     perception_debug = LaunchConfiguration('perception_debug')
     startup_timeout = LaunchConfiguration('startup_timeout')
     use_rviz = LaunchConfiguration('use_rviz')
+    target_color = LaunchConfiguration('target_color')
 
     gazebo_share = FindPackageShare('mycobot_gazebo').find('mycobot_gazebo')
     moveit_share = FindPackageShare('mycobot_moveit_config').find('mycobot_moveit_config')
@@ -90,6 +91,7 @@ def generate_launch_description():
                 launch_arguments={
                     'use_sim_time': 'true',
                     'execute': execute,
+                    'target_color': target_color,
                 }.items()),
         ]
 
@@ -106,6 +108,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'startup_timeout', default_value='90.0',
             description='Seconds to wait for topics, TF, services, and action servers'),
+        DeclareLaunchArgument(
+            'target_color', default_value='red', choices=['red', 'blue'],
+            description='Cylinder color to pick'),
         # Included launch files reuse common argument names such as use_rviz.
         # Scope each include so Gazebo's use_rviz:=false cannot overwrite the
         # top-level value before the MoveIt include evaluates it.

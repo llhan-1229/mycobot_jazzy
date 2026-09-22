@@ -35,6 +35,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     exe = LaunchConfiguration('exe')
     execute = LaunchConfiguration('execute')
+    target_color = LaunchConfiguration('target_color')
 
     # Get the package share directory
     pkg_share_moveit_config_temp = FindPackageShare(package=package_name_moveit_config)
@@ -62,6 +63,12 @@ def generate_launch_description():
         name='execute',
         default_value='false',
         description='Execute the best planned solution when true; otherwise only visualize it')
+
+    declare_target_color_cmd = DeclareLaunchArgument(
+        name='target_color',
+        default_value='red',
+        description='Cylinder color to pick',
+        choices=['red', 'blue'])
 
     def configure_setup(context):
         """Configure MoveIt and create nodes with proper string conversions."""
@@ -117,6 +124,7 @@ def generate_launch_description():
                 moveit_config.to_dict(),
                 {'use_sim_time': use_sim_time},
                 {'execute': ParameterValue(execute, value_type=bool)},
+                {'target_color': target_color},
                 {'start_state': {'content': initial_positions_file_path}},
             ],
         )
@@ -131,6 +139,7 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_exe_cmd)
     ld.add_action(declare_execute_cmd)
+    ld.add_action(declare_target_color_cmd)
 
     # Add the setup and node creation
     ld.add_action(OpaqueFunction(function=configure_setup))

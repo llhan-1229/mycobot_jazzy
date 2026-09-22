@@ -66,6 +66,7 @@ public:
    * @brief Method to call the GetPlanningScene service and return the response.
    * @param target_shape The shape of the target object (e.g., "cylinder", "box").
    * @param target_dimensions The dimensions of the target object (e.g., [height, radius] for a cylinder).
+   * @param target_color Required object color ("red" or "blue").
    * @return PlanningSceneResponse containing the service response data.
    *
    * This method sends a request to the GetPlanningScene service and waits for a response.
@@ -74,6 +75,7 @@ public:
   PlanningSceneResponse call_service(
     const std::string& target_shape,
     const std::vector<double>& target_dimensions,
+    const std::string& target_color,
     std::chrono::seconds timeout = std::chrono::seconds(30));
 
 private:

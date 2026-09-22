@@ -81,6 +81,9 @@ get_planning_scene_server:
 
     # Target matching parameters
     minimum_target_similarity: 0.8
+    color_min_saturation: 0.4
+    color_min_value: 0.1
+    color_min_confidence: 0.6
 
     # Debug output settings
     output_directory: "/tmp/"
