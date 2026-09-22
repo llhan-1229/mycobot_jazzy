@@ -205,6 +205,52 @@ ros2 launch mycobot_mtc_pick_place_demo pick_place_system.launch.py \
   execute:=false perception_debug:=true
 ```
 
+#### 红蓝圆柱颜色识别与抓取选择
+
+当前抓放场景包含两根同尺寸圆柱：
+
+- 红色圆柱中心：`(0.22, 0.12, 0.175)`
+- 蓝色圆柱中心：`(0.12, 0.22, 0.175)`
+- 两根圆柱到 `base_link` 的水平半径均约为 `0.2506 m`
+- 两根圆柱中心距约为 `0.141 m`
+- 两种颜色使用同一个 `place_pose`，默认值为
+  `[-0.183, -0.14, 0.0, 0.0, 0.0, 0.0]`
+
+启动时通过 `target_color` 指定抓取目标，只接受 `red` 或 `blue`，默认值为
+`red`。例如：
+
+```bash
+# 只规划红色目标
+ros2 launch mycobot_mtc_pick_place_demo pick_place_system.launch.py \
+  target_color:=red execute:=false
+
+# 只规划蓝色目标
+ros2 launch mycobot_mtc_pick_place_demo pick_place_system.launch.py \
+  target_color:=blue execute:=false
+
+# 执行蓝色目标的抓放
+ros2 launch mycobot_mtc_pick_place_demo pick_place_system.launch.py \
+  target_color:=blue execute:=true
+```
+
+颜色来自与深度点云对齐的 RGB 字段。每个聚类逐点转换到 HSV，并忽略低饱和度
+和低亮度点；默认阈值为：
+
+- `color_min_saturation: 0.4`
+- `color_min_value: 0.1`
+- `color_min_confidence: 0.6`
+
+感知会先严格匹配请求颜色，再进行圆柱形状和尺寸相似度筛选。颜色未知、置信度
+不足或请求颜色不存在时，服务失败，不会回退到另一种颜色。所有识别出的物体仍会
+加入 MoveIt PlanningScene，未选中的圆柱作为碰撞障碍物；未选圆柱的规划半径默认
+增加 `non_target_cylinder_padding: 0.006 m`，用于补偿 RGB 点云拟合半径小于 Gazebo
+碰撞几何半径的误差。
+
+本功能已验证：红、蓝颜色分类和目标选择测试共 7/7 通过；两种颜色的 plan-only
+均生成 25 个完整 MTC 解；两种颜色各执行一次 Gazebo 抓放，选中圆柱到达放置位置，
+另一根保持原位，控制器均返回 `SUCCEEDED`。停止仿真时可能看到 MoveIt 的 SIGINT
+清理警告，该警告发生在任务完成后的退出阶段，不代表规划或控制器执行失败。
+
 ## 完整抓放任务结构
 
 ```text
